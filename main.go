@@ -1,49 +1,45 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/png"
 	"log"
+	"strconv"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/hajimehoshi/ebiten/v2/text"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
 )
 
 type gameState string
 
 const (
 	LogoSpeed = 0.005
-	LogoWait = 60 // frame
+	LogoWait  = 60 // frame
 	WalkSpeed = 5
 
-	LogoState = gameState("logo")
-	PlayState = gameState("play")
+	InputDelay = 15
+
+	LogoState          = gameState("logo")
+	WizardIdInputState = gameState("wizard")
+	PlayState          = gameState("play")
 )
 
-type size struct{
-	width int
+var alagardFont font.Face
+
+type size struct {
+	width  int
 	height int
 }
 
-type location struct{
+type location struct {
 	x int
 	y int
-}
-
-type Wizard struct{
-	up *ebiten.Image
-	left *ebiten.Image
-	down *ebiten.Image
-	right *ebiten.Image
-	loc location
-}
-
-type World struct {
-	background *ebiten.Image
-	worldSize size
-	loc location
 }
 
 type Logo struct {
@@ -52,17 +48,78 @@ type Logo struct {
 	duration int // frame
 }
 
-type Game struct{
-	state gameState
-	world World
-	logo Logo
-
+type Game struct {
+	state      gameState
+	logo       Logo
 	windowSize size
-	wizard *Wizard
+
+	world    *World
+	wizard   *Wizard
+	wizardId string
+
+	// Wait function
+	isNop           bool
+	nopFrameCounter uint
+	nopFrameLength  uint
 }
 
 func (g *Game) Update() error {
+	if g.checkNop() {
+		return nil
+	}
+
 	switch g.state {
+	case WizardIdInputState:
+		for _, p := range inpututil.PressedKeys() {
+			fmt.Println(p.String())
+
+			switch p {
+			case ebiten.KeyNumpad0,
+				ebiten.KeyDigit0,
+				ebiten.KeyNumpad1,
+				ebiten.KeyDigit1,
+				ebiten.KeyNumpad2,
+				ebiten.KeyDigit2,
+				ebiten.KeyNumpad3,
+				ebiten.KeyDigit3,
+				ebiten.KeyNumpad4,
+				ebiten.KeyDigit4,
+				ebiten.KeyNumpad5,
+				ebiten.KeyDigit5,
+				ebiten.KeyNumpad6,
+				ebiten.KeyDigit6,
+				ebiten.KeyNumpad7,
+				ebiten.KeyDigit7,
+				ebiten.KeyNumpad8,
+				ebiten.KeyDigit8,
+				ebiten.KeyNumpad9,
+				ebiten.KeyDigit9:
+				if len(g.wizardId) < 4 {
+					_, num := trimLastChar(p.String())
+					g.wizardId += num
+					g.wait(InputDelay)
+				}
+			case ebiten.KeyBackspace:
+				if len(g.wizardId) > 0 {
+					g.wizardId, _ = trimLastChar(g.wizardId)
+					g.wait(InputDelay)
+				}
+			case ebiten.KeyEnter:
+				if len(g.wizardId) > 0 {
+					// Initialize wizard
+					wizId, err := strconv.Atoi(g.wizardId)
+					if err != nil {
+						log.Fatal("Invalid wizard Id")
+					}
+
+					if g.wizard, err = getWizard(uint(wizId)); err != nil {
+						log.Fatal("initializing wizard failed")
+					}
+
+					g.state = PlayState
+				}
+			}
+		}
 	case PlayState:
 		for _, p := range inpututil.PressedKeys() {
 			switch p {
@@ -121,11 +178,16 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		op.GeoM.Scale(1.5, 1.5)
 		op.GeoM.Translate(float64(g.wizard.loc.x), float64(g.wizard.loc.y))
 		screen.DrawImage(g.wizard.left, op)
+	case WizardIdInputState:
+		text.Draw(screen, "Type Wizard ID, and then 'Enter'", alagardFont, g.windowSize.width/5, g.windowSize.height/3, color.White)
+		if len(g.wizardId) > 0 {
+			text.Draw(screen, g.wizardId, alagardFont, g.windowSize.width/2-len(g.wizardId)*5, g.windowSize.height/2, color.White)
+		}
 	case LogoState:
 		op := &ebiten.DrawImageOptions{}
 		x, y := g.logo.logo.Size()
-		x = g.windowSize.width / 2 - x / 2
-		y = g.windowSize.height / 2 - y / 2
+		x = g.windowSize.width/2 - x/2
+		y = g.windowSize.height/2 - y/2
 		op.GeoM.Translate(float64(x), float64(y))
 
 		if g.logo.scale < 1 {
@@ -134,7 +196,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		} else if g.logo.duration < LogoWait {
 			g.logo.duration += 1
 		} else {
-			g.state = PlayState
+			g.state = WizardIdInputState
 		}
 
 		screen.DrawImage(g.logo.logo, op)
@@ -145,9 +207,29 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeigh
 	return g.windowSize.width, g.windowSize.height
 }
 
-func (g Game) getWindowCenter() location {
-	return location{g.windowSize.width / 2 - 40,g.windowSize.height / 2 - 40}
+func (g *Game) getWindowCenter() location {
+	return location{g.windowSize.width/2 - 40, g.windowSize.height/2 - 40}
 }
+
+func (g *Game) wait(frames uint) {
+	g.nopFrameCounter = 0
+	g.nopFrameLength = frames
+	g.isNop = true
+}
+
+func (g *Game) checkNop() bool {
+	if g.isNop {
+		g.nopFrameCounter += 1
+		if g.nopFrameCounter > g.nopFrameLength {
+			g.isNop = false
+		}
+	}
+
+	return g.isNop
+}
+
+//go:embed alagard.ttf
+var fontData []byte
 
 func main() {
 	var err error
@@ -156,35 +238,35 @@ func main() {
 	g.state = LogoState
 	g.windowSize = size{640, 480}
 
-	ebiten.SetWindowSize(g.windowSize.width,g.windowSize.height)
+	ebiten.SetWindowSize(g.windowSize.width, g.windowSize.height)
 	ebiten.SetWindowTitle("Forgotten Runes Wizard Walk")
 
 	// Load background
-
-	g.world.background, _, err = ebitenutil.NewImageFromFile("./images/world.png");
-	if err != nil {
-		log.Fatal("background file not found")
-	}
-	g.world.worldSize.width, g.world.worldSize.height = g.world.background.Size()
-
-	// Load wizard
-	wiz, _, err := ebitenutil.NewImageFromFile("./images/wizard/wizard.png")
-	if err != nil {
-		log.Fatal("wizard file not found")
-	}
-
-	g.wizard = &Wizard{
-		up: wiz,
-		left: wiz,
-		down: wiz,
-		right: wiz,
+	if g.world, err = getWorld(); err != nil {
+		log.Fatal("initializing world failed")
 	}
 
 	// Load logo
-	g.logo.logo, _, err = ebitenutil.NewImageFromFile("./images/forgotten-runes-logo.png")
-
+	logoImage, err := loadEbitenImageFromUrl("https://www.forgottenrunes.com/static/img/forgotten-runes-logo.png")
 	if err != nil {
 		log.Fatal("logo file not found")
+	}
+
+	g.logo.logo = logoImage
+
+	// font
+	tt, err := opentype.Parse(fontData)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	alagardFont, err = opentype.NewFace(tt, &opentype.FaceOptions{
+		Size:    24,
+		DPI:     72,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	if err := ebiten.RunGame(g); err != nil {
