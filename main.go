@@ -7,7 +7,11 @@ import (
 	"image/color"
 	_ "image/png"
 	"log"
+	"math"
+	"math/rand"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -17,6 +21,7 @@ import (
 )
 
 type gameState string
+type wizardAngle string
 
 const (
 	LogoSpeed = 0.005
@@ -28,6 +33,7 @@ const (
 	LogoState          = gameState("logo")
 	WizardIdInputState = gameState("wizard")
 	PlayState          = gameState("play")
+	MetTargetWizard    = gameState("metTargetWizard")
 )
 
 var alagardFont font.Face
@@ -56,11 +62,16 @@ type Game struct {
 	world    *World
 	wizard   *Wizard
 	wizardId string
+	targetWizard *Wizard
 
 	// Wait function
 	isNop           bool
 	nopFrameCounter uint
 	nopFrameLength  uint
+
+	// Time
+	gameStart time.Time
+	gameEnd time.Time
 }
 
 func (g *Game) Update() error {
@@ -71,8 +82,6 @@ func (g *Game) Update() error {
 	switch g.state {
 	case WizardIdInputState:
 		for _, p := range inpututil.PressedKeys() {
-			fmt.Println(p.String())
-
 			switch p {
 			case ebiten.KeyNumpad0,
 				ebiten.KeyDigit0,
@@ -116,50 +125,106 @@ func (g *Game) Update() error {
 						log.Fatal("initializing wizard failed")
 					}
 
+					// Generate target wiz
+					var targetWizID uint
+					rand.Seed(time.Now().UTC().UnixNano() + int64(wizId))
+					for true {
+						targetWizID = uint(rand.Intn(10000))
+						if targetWizID > 0 && targetWizID < 10000 {
+							break
+						}
+					}
+
+					if g.targetWizard, err = getWizard(uint(targetWizID)); err != nil {
+						log.Fatal("initializing target wizard failed")
+					}
+					g.targetWizard.loc = location{
+						x: rand.Intn(g.world.worldSize.width),
+						y: rand.Intn(g.world.worldSize.height),
+					}
+					fmt.Println(targetWizID, g.targetWizard.loc.x, g.targetWizard.loc.y)
+
+					g.gameStart = time.Now()
 					g.state = PlayState
 				}
 			}
 		}
 	case PlayState:
+		moved := false
 		for _, p := range inpututil.PressedKeys() {
 			switch p {
 			case ebiten.KeyArrowUp:
+				g.wizard.angle = WizardAngleUp
 				if g.wizard.loc.y > 0 {
 					if g.wizard.loc.y <= g.getWindowCenter().y && g.world.loc.y == 0 ||
 						(g.wizard.loc.y > g.getWindowCenter().y && g.world.loc.y >= g.world.worldSize.height-g.windowSize.height) {
 						g.wizard.loc.y -= WalkSpeed
+						moved = true
 					} else if g.world.loc.y > 0 {
 						g.world.loc.y -= WalkSpeed
+						moved = true
 					}
 				}
 			case ebiten.KeyArrowLeft:
+				g.wizard.angle = WizardAngleLeft
 				if g.wizard.loc.x > 0 {
 					if g.wizard.loc.x <= g.getWindowCenter().x && g.world.loc.x == 0 ||
 						(g.wizard.loc.x > g.getWindowCenter().x && g.world.loc.x >= g.world.worldSize.width-g.windowSize.width) {
 						g.wizard.loc.x -= WalkSpeed
+						moved = true
 					} else if g.world.loc.x > 0 {
 						g.world.loc.x -= WalkSpeed
+						moved = true
 					}
 				}
 			case ebiten.KeyArrowDown:
+				g.wizard.angle = WizardAngleDown
 				if g.wizard.loc.y < g.world.worldSize.height {
 					if g.wizard.loc.y < g.getWindowCenter().y && g.world.loc.y == 0 ||
 						(g.world.loc.y >= g.world.worldSize.height-g.windowSize.height && g.wizard.loc.y < g.windowSize.height-75) {
 						g.wizard.loc.y += WalkSpeed
+						moved = true
 					} else if g.world.loc.y < g.world.worldSize.height-g.windowSize.height {
 						g.world.loc.y += WalkSpeed
+						moved = true
 					}
 				}
 			case ebiten.KeyArrowRight:
+				g.wizard.angle = WizardAngleRight
 				if g.wizard.loc.x < g.getWindowCenter().x ||
 					(g.world.loc.x >= g.world.worldSize.width-g.windowSize.width && g.wizard.loc.x < g.windowSize.width-75) {
 					g.wizard.loc.x += WalkSpeed
+					moved = true
 				} else if g.world.loc.x < g.world.worldSize.width-g.windowSize.width {
 					g.world.loc.x += WalkSpeed
+					moved = true
 				}
 			}
 		}
-		fmt.Println(g.wizard.loc.x, g.wizard.loc.y, g.world.loc.x, g.world.loc.y, g.getWindowCenter().x, g.getWindowCenter().y)
+
+		if moved {
+			// fmt.Println(g.wizard.loc.x, g.wizard.loc.y, g.world.loc.x, g.world.loc.y, g.getWindowCenter().x, g.getWindowCenter().y)
+
+			//g.targetWizard.loc.x += (rand.Intn(3) - 1) * WalkSpeed
+			//g.targetWizard.loc.y += (rand.Intn(3) - 1) * WalkSpeed
+		}
+
+		// Check if wiz meets the target wiz
+		if (g.targetWizard.loc.x >= g.world.loc.x && g.targetWizard.loc.x <= g.world.loc.x + g.windowSize.width) &&
+			(g.targetWizard.loc.y >= g.world.loc.y && g.targetWizard.loc.y <= g.world.loc.y + g.windowSize.height) {
+			// fmt.Println("Found targwiz")
+			tWizLoc := location{
+				x: g.targetWizard.loc.x - g.world.loc.x,
+				y: g.targetWizard.loc.y - g.world.loc.y,
+			}
+			if math.Abs(float64(tWizLoc.x - g.wizard.loc.x)) < 25 * 1.5 && // 25px * 1.5 scale * 2
+			math.Abs(float64(tWizLoc.y - g.wizard.loc.y)) < 25 * 1.5 {
+				// hit
+				// fmt.Println("hit!", g.wizard.loc.x, g.wizard.loc.y, tWizLoc.x, tWizLoc.y)
+				g.gameEnd = time.Now()
+				g.state = MetTargetWizard
+			}
+		}
 	}
 
 	return nil
@@ -174,15 +239,42 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}).(*ebiten.Image)
 		screen.DrawImage(croppedMap, nil)
 
+		// Draw wizard
 		op := &ebiten.DrawImageOptions{}
 		op.GeoM.Scale(1.5, 1.5)
 		op.GeoM.Translate(float64(g.wizard.loc.x), float64(g.wizard.loc.y))
-		screen.DrawImage(g.wizard.left, op)
+		wizImg := g.wizard.left
+		switch g.wizard.angle {
+		case WizardAngleLeft:
+			wizImg = g.wizard.left
+		case WizardAngleRight:
+			wizImg = g.wizard.right
+		case WizardAngleUp:
+			wizImg = g.wizard.up
+		case WizardAngleDown:
+			wizImg = g.wizard.down
+		}
+		screen.DrawImage(wizImg, op)
+
+		// Draw target wizard
+		if (g.targetWizard.loc.x >= g.world.loc.x && g.targetWizard.loc.x <= g.world.loc.x + g.windowSize.width) &&
+			(g.targetWizard.loc.y >= g.world.loc.y && g.targetWizard.loc.y <= g.world.loc.y + g.windowSize.height) {
+			tWizLoc := location{
+				x: g.targetWizard.loc.x - g.world.loc.x,
+				y: g.targetWizard.loc.y - g.world.loc.y,
+			}
+			opTargetWiz := &ebiten.DrawImageOptions{}
+			opTargetWiz.GeoM.Scale(1.5, 1.5)
+			opTargetWiz.GeoM.Translate(float64(tWizLoc.x), float64(tWizLoc.y))
+			screen.DrawImage(g.targetWizard.left, opTargetWiz)
+		}
+
 	case WizardIdInputState:
 		text.Draw(screen, "Type Wizard ID, and then 'Enter'", alagardFont, g.windowSize.width/5, g.windowSize.height/3, color.White)
 		if len(g.wizardId) > 0 {
 			text.Draw(screen, g.wizardId, alagardFont, g.windowSize.width/2-len(g.wizardId)*5, g.windowSize.height/2, color.White)
 		}
+
 	case LogoState:
 		op := &ebiten.DrawImageOptions{}
 		x, y := g.logo.logo.Size()
@@ -200,6 +292,25 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 
 		screen.DrawImage(g.logo.logo, op)
+
+	case MetTargetWizard:
+		// Draw wizard
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Scale(3, 3)
+		op.GeoM.Translate(float64(100), float64(150))
+		screen.DrawImage(g.wizard.right, op)
+
+		opTargetWiz := &ebiten.DrawImageOptions{}
+		opTargetWiz.GeoM.Scale(3, 3)
+		opTargetWiz.GeoM.Translate(float64(400), float64(150))
+		screen.DrawImage(g.targetWizard.left, opTargetWiz)
+
+		text.Draw(screen, "GM!", alagardFont, g.windowSize.width/2-len(g.wizardId)*5, g.windowSize.height/5, color.White)
+
+		diff := g.gameEnd.Sub(g.gameStart)
+		diffStr := fmt.Sprint(diff)
+		diffStr = "Found your fellow wiz in " + diffStr[0:strings.Index(diffStr, ".")] + "s"
+		text.Draw(screen, diffStr, alagardFont, g.windowSize.width/2-len(diffStr)*5, g.windowSize.height/5 * 4, color.White)
 	}
 }
 

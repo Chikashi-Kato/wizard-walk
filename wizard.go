@@ -12,12 +12,20 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 )
 
+const (
+	WizardAngleUp = wizardAngle("up")
+	WizardAngleDown = wizardAngle("down")
+	WizardAngleLeft = wizardAngle("left")
+	WizardAngleRight = wizardAngle("right")
+)
+
 type Wizard struct {
 	up    *ebiten.Image
 	left  *ebiten.Image
 	down  *ebiten.Image
 	right *ebiten.Image
 	loc   location
+	angle wizardAngle
 }
 
 func getWizard(id uint) (*Wizard, error) {
@@ -31,7 +39,7 @@ func getWizard(id uint) (*Wizard, error) {
 }
 
 func (w *Wizard) downloadWizardImages(id uint) error {
-	url := fmt.Sprintf("https://nftz.forgottenrunes.com/wizard/%d.zip", id)
+	url := fmt.Sprintf("https://www.forgottenrunes.com/api/art/wizards/%d.zip", id)
 
 	// Get the data
 	resp, err := http.Get(url)
@@ -52,9 +60,9 @@ func (w *Wizard) downloadWizardImages(id uint) error {
 	}
 
 	// Read all the files from zip archive
-	var wizardFilePattern = regexp.MustCompile(`^50\/wizard-.+-nobg.png$`)
+	var wizardFilePattern = regexp.MustCompile(`^50\/turnarounds\/wizards-.+-(.+).png$`)
 	for _, zipFile := range zipReader.File {
-		if wizardFilePattern.MatchString(zipFile.Name) {
+		if rs := wizardFilePattern.FindStringSubmatch(zipFile.Name); len(rs) != 0 {
 			fmt.Println("Reading file:", zipFile.Name)
 			unzippedFileBytes, err := readZipFile(zipFile)
 			if err != nil {
@@ -64,11 +72,20 @@ func (w *Wizard) downloadWizardImages(id uint) error {
 			if err != nil {
 				return fmt.Errorf("failed to create ebiten image: %w", err)
 			}
-			w.up = wizImg
-			w.down = wizImg
-			w.left = wizImg
-			w.right = wizImg
-			return nil
+			switch rs[1] {
+			case "right":
+				w.right = wizImg
+			case "left":
+				w.left = wizImg
+			case "back":
+				w.up = wizImg
+			case "front":
+				w.down = wizImg
+			}
+
+			if w.right != nil && w.left != nil && w.up != nil && w.down != nil {
+				return nil
+			}
 		}
 	}
 
